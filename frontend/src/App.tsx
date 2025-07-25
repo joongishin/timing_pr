@@ -1,10 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { supabase } from './supabaseClient';
 import './App.css';
+
+const API_BASE_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
 
 const minute = 1/12;  // maybe 10 minutes?
 const DISABLE_TIME_MS = minute * 60 * 1000;
 
+interface Problem {
+  id: string;
+  text: string;
+}
+
 const App: React.FC = () => {
+
   // User study conditions: baseline, llm_all, llm_early, llm_laster
   const queryParams = new URLSearchParams(window.location.search);
   const condition = queryParams.get("condition") || "baseline";  // fallback to "baseline" as default
@@ -40,6 +49,27 @@ const App: React.FC = () => {
   const ideasCRef = useRef<HTMLDivElement>(null);
   const ideasDRef = useRef<HTMLDivElement>(null);
   const ideasERef = useRef<HTMLDivElement>(null);
+
+  // For loading problems
+  const [problems, setProblems] = useState<Problem[]>([])
+
+  useEffect(() => {
+    async function loadProblems() {
+      let { data, error } = await supabase
+        .from('pr_problem')
+        .select('*')
+        .order('id', { ascending: true });
+      if (error) {
+        console.error('Error loading problems: ', error);
+      } else {
+        console.log("Problems from Supabase:", data);
+        setProblems(data || []);
+      }
+    }
+    loadProblems();
+  }, []);
+
+  const problem = problems[0];
 
   // Scroll to bottom when ideas change
   useEffect(() => {
@@ -128,13 +158,51 @@ const App: React.FC = () => {
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
+  // Calling OpenAI API
+  //// Disabling the generation button while llm generates response
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  //// Prompting llm
+  const handleGenerate = async (
+    windowID: "B" | "C" | "D" | "E",
+    problemText: string | string[],
+    ideas: any,
+    setIdeas: React.Dispatch<React.SetStateAction<string[]>>
+  ) => {
+    setIsGenerating(true);  // Disabling all buttons
+    try {
+      const response = await fetch(`${API_BASE_URL}/prompt_llm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          window_id: windowID,
+          problem: problemText,
+          ideas: ideas,
+        }),
+      });
+      const result = await response.json();
+      if (result.text) {
+        setIdeas(prev => [...prev, result.text]);
+      }
+    } catch (error) {
+      console.error("Error calling backend:", error);
+    } finally {
+      setIsGenerating(false);  // Re-enabling the buttons
+    }
+  }
+
+
+  // GUI
   return (
     <div className="App">
       <div className="grid-container">
         <div className="grid-item item-a">
           <div className="window-content">
             <h5 className="window-title">Problem Description</h5>
-            <p className="window-body">The Sydney Opera House has experienced repeated incidents of unauthorized access, primarily by protesters who trespass onto the building's distinctive sail structures. These individuals typically aim to gain public and media attention by displaying banners or defacing the sails with slogans. Due to the building’s symbolic significance, heritage status, and high visibility, such incidents pose political and reputational risks. The protesters have exploited specific vulnerable points of access, compromising the site's security and public image. Addressing this issue requires solutions that balance security enhancement with the preservation of the Opera House’s cultural and architectural integrity.</p>
+            <p className="window-body">
+              {problem ? problem.text : 'Loading...'}
+            </p>
+            {/* <p className="window-body">The Sydney Opera House has experienced repeated incidents of unauthorized access, primarily by protesters who trespass onto the building's distinctive sail structures. These individuals typically aim to gain public and media attention by displaying banners or defacing the sails with slogans. Due to the building’s symbolic significance, heritage status, and high visibility, such incidents pose political and reputational risks. The protesters have exploited specific vulnerable points of access, compromising the site's security and public image. Addressing this issue requires solutions that balance security enhancement with the preservation of the Opera House’s cultural and architectural integrity.</p> */}
           </div>
         </div>
         <div className="grid-item item-b">
@@ -158,7 +226,13 @@ const App: React.FC = () => {
               placeholder="Type your idea here..."
             />
             {showGenerateButton.B && (
-              <button className="window-generate-btn">Generate</button>
+              <button 
+                className="window-generate-btn"
+                onClick={() => handleGenerate("B", problem?.text || "", ideasB, setIdeasB)}
+                disabled={isGenerating}
+              >
+                {isGenerating ? "Generating ..." : "Generate"}
+              </button>
             )}
           </div>
         </div>
@@ -183,14 +257,20 @@ const App: React.FC = () => {
               placeholder="Type your idea here..."
             />
             {showGenerateButton.C && (
-              <button className="window-generate-btn">Generate</button>
+              <button 
+                className="window-generate-btn"
+                onClick={() => handleGenerate("C", problem?.text || "", { idea_b: ideasB, idea_c: ideasC }, setIdeasC)}
+                disabled={isGenerating}
+              >
+                {isGenerating ? "Generating ..." : "Generate"}
+              </button>
             )}
           </div>
         </div>
         <div className="grid-item item-d" style={{ position: 'relative'}}>
           <div className="window-content" style={{ position: 'relative' }}>
-            <h5 className="window-title">How else the problems can be defined?</h5>
-            <p className="window-body">Brainstorm alterantive ways to define what the problem is about.</p>
+            <h5 className="window-title">How else the problems can be approached?</h5>
+            <p className="window-body">Brainstorm alterantive perspectives to address the problems.</p>
             <div className="window-ideas-list" ref={ideasDRef}>
               {ideasD.map((idea, idx) => (
                 <div className="window-idea-box" key={idx}>
@@ -209,7 +289,13 @@ const App: React.FC = () => {
               disabled={!windowDEnabled}
             />
             {showGenerateButton.D && (
-              <button className="window-generate-btn" disabled={!windowDEnabled}>Generate</button>
+              <button 
+                className="window-generate-btn"
+                onClick={() => handleGenerate("D", problem?.text || "", { idea_d: ideasD, idea_e: ideasE }, setIdeasD)}
+                disabled={!windowDEnabled || isGenerating}
+              >
+                {isGenerating ? "Generating ..." : "Generate"}
+              </button>
             )}
           </div>
           {!windowDEnabled && (
@@ -239,8 +325,14 @@ const App: React.FC = () => {
               placeholder="Type your idea here..."
               disabled={!windowEEnabled}
             />
-            {showGenerateButton.D && (
-              <button className="window-generate-btn" disabled={!windowEEnabled}>Generate</button>
+            {showGenerateButton.E && (
+              <button 
+                className="window-generate-btn"
+                onClick={() => handleGenerate("E", problem?.text || "", { idea_d: ideasD, idea_e: ideasE }, setIdeasE)}
+                disabled={!windowEEnabled || isGenerating}
+              >
+                {isGenerating ? "Generating ..." : "Generate"}
+              </button>
             )}
           </div>
           {!windowEEnabled && (
